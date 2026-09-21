@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Transformadores CH — Dashboard de Prospección</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -241,6 +242,7 @@
   </div>
   <div class="header-actions">
     <select id="monthSelect"></select>
+    <span id="cloudStatus" style="font-size:11px; color:var(--text-faint); white-space:nowrap;"></span>
     <button class="btn btn-ghost" id="btnSettings">⚙ Personalizar</button>
     <button class="btn btn-ghost" id="btnManageSellers">Vendedores</button>
     <button class="btn btn-ghost" id="btnCSV">CSV</button>
@@ -416,16 +418,28 @@
 </div>
 
 <script>
+/* ============ CONFIG SUPABASE ============ */
+const CONFIG = {
+  SUPABASE_URL: 'https://uyojpxdcugwtsitqicbn.supabase.co',
+  SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV5b2pweGRjdWd3dHNpdHFpY2JuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk5ODkxNDgsImV4cCI6MjEwNTU2NTE0OH0.y3xnAZ6BH1n-r-5g0e54mkdKlkv1uJYL4zy8-jsDCX4'
+};
+const SUPABASE_ENABLED = !!(CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY);
+let supabaseClient = null;
+if(SUPABASE_ENABLED && window.supabase){
+  supabaseClient = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+}
+
 /* ============ DATA MODEL ============ */
 const STORAGE_KEY = 'tch_dashboard_data_v1';
 const STAGES = ['prospecto','contactado','visita','cotizacion','agendado','cerrado'];
 const STAGE_LABELS = {prospecto:'Prospecto', contactado:'Contactado', visita:'Visita/diagnóstico', cotizacion:'Cotización enviada', agendado:'Agendado', cerrado:'Cerrado'};
 
+function defaultSellers(){
+  return [{id:'s1', name:'Alex Hidalgo'}, {id:'s2', name:'Vendedor A'}];
+}
+
 function defaultData(){
-  const sellers = [
-    {id:'s1', name:'Alex Hidalgo'},
-    {id:'s2', name:'Vendedor A'}
-  ];
+  const sellers = defaultSellers();
   const deals = [];
   const companies = ['Industrias Maipo','Agrícola San Rafael','Metalúrgica Andina','Constructora Bicentenario','Frigorífico Sur','Minera Copiapó Norte','Textil Rancagua','Viña Los Robles','Papelera del Pacífico','Cerámica Talca','Panificadora Central','Distribuidora Osorno','Química Puerto Montt','Autopartes Quilpué','Logística Valparaíso'];
   const today = new Date();
@@ -455,19 +469,66 @@ function defaultData(){
   return {sellers, deals};
 }
 
-let DATA = loadData();
-function loadData(){
+let DATA = {sellers:[], deals:[]};
+let CLOUD_MODE = false; // true cuando los datos realmente vienen de Supabase
+
+function loadLocalData(){
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
     if(raw) return JSON.parse(raw);
-  }catch(e){ console.error('Error leyendo datos', e); }
+  }catch(e){ console.error('Error leyendo datos locales', e); }
   const d = defaultData();
-  saveData(d);
+  saveLocalCache(d);
   return d;
 }
-function saveData(d){
+function saveLocalCache(d){
   try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(d)); }
-  catch(e){ console.error('No se pudo guardar', e); }
+  catch(e){ console.error('No se pudo guardar el respaldo local', e); }
+}
+
+/* Carga inicial: intenta Supabase; si falla o no está configurado, usa localStorage */
+async function initData(){
+  if(SUPABASE_ENABLED && supabaseClient){
+    try{
+      let {data: sellerRows, error: sellerErr} = await supabaseClient.from('dashboard_vendedores').select('*');
+      if(sellerErr) throw sellerErr;
+      if(!sellerRows || sellerRows.length===0){
+        const seeds = defaultSellers();
+        const {error: insErr} = await supabaseClient.from('dashboard_vendedores').insert(seeds);
+        if(insErr) throw insErr;
+        sellerRows = seeds;
+      }
+      const {data: dealRows, error: dealErr} = await supabaseClient.from('dashboard_ventas').select('*').order('date', {ascending:true});
+      if(dealErr) throw dealErr;
+
+      DATA.sellers = sellerRows.map(s=>({id:s.id, name:s.name}));
+      DATA.deals = (dealRows||[]).map(d=>({id:d.id, company:d.company, sellerId:d.seller_id, stage:d.stage, date:d.date, amount:d.amount}));
+      CLOUD_MODE = true;
+      saveLocalCache(DATA);
+    }catch(e){
+      console.error('No se pudo conectar a Supabase, usando datos locales de respaldo:', e);
+      DATA = loadLocalData();
+      CLOUD_MODE = false;
+    }
+  } else {
+    DATA = loadLocalData();
+    CLOUD_MODE = false;
+  }
+}
+
+function showCloudBadge(){
+  const el = document.getElementById('cloudStatus');
+  if(!el) return;
+  if(SUPABASE_ENABLED && CLOUD_MODE){
+    el.textContent = '☁ Conectado';
+    el.style.color = 'var(--lime)';
+  } else if(SUPABASE_ENABLED && !CLOUD_MODE){
+    el.textContent = '⚠ Sin conexión (usando datos locales)';
+    el.style.color = 'var(--amber)';
+  } else {
+    el.textContent = '💻 Modo local';
+    el.style.color = 'var(--text-faint)';
+  }
 }
 
 /* ============ MONTH SELECTOR ============ */
@@ -699,7 +760,7 @@ function populateSellerSelect(sel){
 }
 document.getElementById('btnAddProspect').onclick = openProspectModal;
 
-document.getElementById('formProspect').onsubmit = (e)=>{
+document.getElementById('formProspect').onsubmit = async (e)=>{
   e.preventDefault();
   const company = document.getElementById('fCompany').value.trim();
   const sellerId = document.getElementById('fSeller').value;
@@ -708,8 +769,25 @@ document.getElementById('formProspect').onsubmit = (e)=>{
   const amountRaw = document.getElementById('fAmount').value;
   const amount = amountRaw ? Number(amountRaw) : null;
   if(!company || !sellerId || !stage || !date) return;
-  DATA.deals.push({id:'d'+Date.now(), company, sellerId, stage, date, amount});
-  saveData(DATA);
+
+  const seller = DATA.sellers.find(s=>s.id===sellerId);
+  const newDeal = {id:'d'+Date.now(), company, sellerId, stage, date, amount};
+  const submitBtn = e.target.querySelector('button[type="submit"]');
+  submitBtn.disabled = true; submitBtn.textContent = 'Guardando...';
+
+  if(SUPABASE_ENABLED && supabaseClient && CLOUD_MODE){
+    const {error} = await supabaseClient.from('dashboard_ventas').insert({
+      id:newDeal.id, company:newDeal.company, seller_id:sellerId, seller_name: seller?seller.name:null,
+      stage:newDeal.stage, date:newDeal.date, amount:newDeal.amount
+    });
+    if(error){
+      console.error('Error guardando en Supabase', error);
+      alert('No se pudo guardar en la nube, se guardó localmente. Revisá tu conexión.');
+    }
+  }
+  DATA.deals.push(newDeal);
+  saveLocalCache(DATA);
+  submitBtn.disabled = false; submitBtn.textContent = 'Guardar';
   modalProspect.classList.remove('open');
   currentMonth = monthKey(date);
   populateMonthSelect();
@@ -730,28 +808,38 @@ function renderSellerList(){
       <button class="icon-btn" data-remove-seller="${s.id}">Quitar</button>
     </div>`).join('') || `<div class="empty-state">Sin vendedores.</div>`;
   el.querySelectorAll('[data-remove-seller]').forEach(btn=>{
-    btn.onclick = ()=>{
+    btn.onclick = async ()=>{
       const id = btn.getAttribute('data-remove-seller');
       if(DATA.deals.some(d=>d.sellerId===id)){
         if(!confirm('Este vendedor tiene ventas cargadas. ¿Quitarlo igual? (las ventas quedan asociadas a un vendedor eliminado)')) return;
       }
+      if(SUPABASE_ENABLED && supabaseClient && CLOUD_MODE){
+        const {error} = await supabaseClient.from('dashboard_vendedores').delete().eq('id', id);
+        if(error){ console.error('Error borrando vendedor en Supabase', error); alert('No se pudo borrar en la nube.'); return; }
+      }
       DATA.sellers = DATA.sellers.filter(s=>s.id!==id);
-      saveData(DATA);
+      saveLocalCache(DATA);
       renderSellerList();
       render();
     };
   });
 }
-document.getElementById('btnAddSeller').onclick = ()=>{
+document.getElementById('btnAddSeller').onclick = async ()=>{
   const input = document.getElementById('newSellerName');
   const name = input.value.trim();
   if(!name) return;
-  DATA.sellers.push({id:'s'+Date.now(), name});
-  saveData(DATA);
+  const newSeller = {id:'s'+Date.now(), name};
+  if(SUPABASE_ENABLED && supabaseClient && CLOUD_MODE){
+    const {error} = await supabaseClient.from('dashboard_vendedores').insert(newSeller);
+    if(error){ console.error('Error agregando vendedor en Supabase', error); alert('No se pudo guardar en la nube.'); return; }
+  }
+  DATA.sellers.push(newSeller);
+  saveLocalCache(DATA);
   input.value='';
   renderSellerList();
   render();
 };
+
 
 /* ============ MODAL: CSV ============ */
 const modalCSV = document.getElementById('modalCSV');
@@ -777,7 +865,7 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
   const file = e.target.files[0];
   if(!file) return;
   const reader = new FileReader();
-  reader.onload = (ev)=>{
+  reader.onload = async (ev)=>{
     try{
       const text = ev.target.result;
       const lines = text.split('\n').filter(l=>l.trim());
@@ -785,6 +873,8 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
       const dataLines = lines.slice(1);
       const nameToSeller = {};
       DATA.sellers.forEach(s=> nameToSeller[s.name]=s.id );
+      const newSellers = [];
+      const newDeals = [];
       dataLines.forEach(line=>{
         const cols = parseCSVLine(line);
         if(cols.length<6) return;
@@ -792,18 +882,37 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
         let sellerId = nameToSeller[sellerName];
         if(!sellerId){
           sellerId = 's'+Date.now()+Math.random().toString(36).slice(2,6);
-          DATA.sellers.push({id:sellerId, name:sellerName||'Sin nombre'});
+          const newSeller = {id:sellerId, name:sellerName||'Sin nombre'};
+          DATA.sellers.push(newSeller);
+          newSellers.push(newSeller);
           nameToSeller[sellerName]=sellerId;
         }
-        DATA.deals.push({
+        const newDeal = {
           id:'d'+Date.now()+Math.random().toString(36).slice(2,6),
           company, sellerId,
           stage: STAGES.includes(stage)?stage:'prospecto',
           date: date || new Date().toISOString().slice(0,10),
           amount: amount? Number(amount): null
-        });
+        };
+        DATA.deals.push(newDeal);
+        newDeals.push(newDeal);
       });
-      saveData(DATA);
+
+      if(SUPABASE_ENABLED && supabaseClient && CLOUD_MODE){
+        if(newSellers.length){
+          await supabaseClient.from('dashboard_vendedores').insert(newSellers);
+        }
+        if(newDeals.length){
+          const rows = newDeals.map(d=>{
+            const seller = DATA.sellers.find(s=>s.id===d.sellerId);
+            return {id:d.id, company:d.company, seller_id:d.sellerId, seller_name: seller?seller.name:null, stage:d.stage, date:d.date, amount:d.amount};
+          });
+          const {error} = await supabaseClient.from('dashboard_ventas').insert(rows);
+          if(error){ console.error('Error importando a Supabase', error); alert('Se importó localmente, pero hubo un error subiendo algunos datos a la nube.'); }
+        }
+      }
+
+      saveLocalCache(DATA);
       populateMonthSelect();
       render();
       modalCSV.classList.remove('open');
@@ -960,10 +1069,15 @@ function render(){
   renderEvolution();
 }
 
-applySettings();
-populateMonthSelect();
-render();
-applyReadOnlyMode();
+async function boot(){
+  await initData();
+  applySettings();
+  populateMonthSelect();
+  render();
+  applyReadOnlyMode();
+  showCloudBadge();
+}
+boot();
 </script>
 </body>
 </html>
