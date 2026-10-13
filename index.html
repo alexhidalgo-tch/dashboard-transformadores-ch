@@ -247,6 +247,7 @@
     <span id="cloudStatus" style="font-size:11px; color:var(--text-faint); white-space:nowrap;"></span>
     <button class="btn btn-ghost" id="btnSettings">⚙ Personalizar</button>
     <button class="btn btn-ghost" id="btnManageSellers">Vendedores</button>
+    <button class="btn btn-ghost" id="btnReport">📊 Informe</button>
     <button class="btn btn-ghost" id="btnDeals">📋 Operaciones</button>
     <button class="btn btn-ghost" id="btnCSV">CSV</button>
     <button class="btn btn-primary" id="btnAddProspect">+ Cargar venta</button>
@@ -406,6 +407,23 @@
   </div>
 </div>
 
+<!-- MODAL: Informe diario -->
+<div class="modal-overlay" id="modalReport">
+  <div class="modal" style="max-width:640px;">
+    <button class="modal-close" data-close>&times;</button>
+    <h2>📊 Informe diario</h2>
+    <div class="field">
+      <label>Fecha del informe</label>
+      <input type="date" id="reportDate">
+    </div>
+    <div id="reportBody"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="btnReportCSV">Descargar CSV</button>
+      <button class="btn btn-primary" data-close>Cerrar</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL: Operaciones del mes -->
 <div class="modal-overlay" id="modalDeals">
   <div class="modal" style="max-width:760px;">
@@ -485,6 +503,7 @@ function defaultData(){
 let DATA = {sellers:[], deals:[]};
 let CLOUD_MODE = false; // true cuando los datos realmente vienen de Supabase
 let HAS_CONTACTED_AT = false; // true si la tabla en Supabase tiene la columna contacted_at
+let HAS_VISITED_AT = false;   // true si la tabla en Supabase tiene la columna visited_at
 
 function loadLocalData(){
   try{
@@ -514,12 +533,14 @@ async function initData(){
       }
       const {data: dealRows, error: dealErr} = await supabaseClient.from('dashboard_ventas').select('*').order('date', {ascending:true});
       if(dealErr) throw dealErr;
-      /* ¿Existe la columna contacted_at? (agregada desde el SQL Editor de Supabase) */
-      const {error: probeErr} = await supabaseClient.from('dashboard_ventas').select('contacted_at').limit(1);
-      HAS_CONTACTED_AT = !probeErr;
+      /* ¿Existen las columnas contacted_at y visited_at? (se agregan desde el SQL Editor de Supabase) */
+      const {error: probeContacto} = await supabaseClient.from('dashboard_ventas').select('contacted_at').limit(1);
+      HAS_CONTACTED_AT = !probeContacto;
+      const {error: probeVisita} = await supabaseClient.from('dashboard_ventas').select('visited_at').limit(1);
+      HAS_VISITED_AT = !probeVisita;
 
       DATA.sellers = sellerRows.map(s=>({id:s.id, name:s.name}));
-      DATA.deals = (dealRows||[]).map(d=>({id:d.id, company:d.company, sellerId:d.seller_id, stage:d.stage, date:d.date, amount:d.amount, contacted:d.contacted_at||null}));
+      DATA.deals = (dealRows||[]).map(d=>({id:d.id, company:d.company, sellerId:d.seller_id, stage:d.stage, date:d.date, amount:d.amount, contacted:d.contacted_at||null, visited:d.visited_at||null}));
       CLOUD_MODE = true;
       saveLocalCache(DATA);
     }catch(e){
@@ -739,11 +760,18 @@ async function cambiarEtapa(dealId, nuevaEtapa){
   deal.stage = nuevaEtapa;
   /* Al llegar a contactado (o más allá) se estampa la fecha de contacto la primera vez */
   const patch = { stage: nuevaEtapa };
-  let contactoNuevo = null;
+  const hoy = new Date().toISOString().slice(0,10);
+  let contactoNuevo = null, visitaNueva = null;
   if(STAGES.indexOf(nuevaEtapa) >= STAGES.indexOf('contactado') && !deal.contacted){
-    contactoNuevo = new Date().toISOString().slice(0,10);
+    contactoNuevo = hoy;
     deal.contacted = contactoNuevo;
     if(HAS_CONTACTED_AT) patch.contacted_at = contactoNuevo;
+  }
+  /* Al llegar a visita (o más allá) se estampa la fecha de visita la primera vez */
+  if(STAGES.indexOf(nuevaEtapa) >= STAGES.indexOf('visita') && !deal.visited){
+    visitaNueva = hoy;
+    deal.visited = visitaNueva;
+    if(HAS_VISITED_AT) patch.visited_at = visitaNueva;
   }
   saveLocalCache(DATA);
   if(SUPABASE_ENABLED && supabaseClient && CLOUD_MODE){
@@ -751,6 +779,7 @@ async function cambiarEtapa(dealId, nuevaEtapa){
     if(error){
       deal.stage = anterior;
       if(contactoNuevo) delete deal.contacted;
+      if(visitaNueva) delete deal.visited;
       console.error('Error actualizando etapa en Supabase', error);
       alert('No se pudo actualizar en la nube. Revisa tu conexión.');
       render(); renderDealsList();
@@ -767,11 +796,11 @@ function renderDealsList(){
   const cur = dealsInMonth(currentMonth).slice().sort((a,b)=> b.date.localeCompare(a.date) || a.company.localeCompare(b.company));
   if(!cur.length){ body.innerHTML = '<div class="empty-state">Sin operaciones este mes todavía.</div>'; return; }
   const opts = sel => STAGES.map(s=>`<option value="${s}" ${s===sel?'selected':''}>${STAGE_LABELS[s]}</option>`).join('');
-  body.innerHTML = '<table><thead><tr><th>Empresa</th><th>Vendedor</th><th>Etapa</th><th>Fecha</th><th>Contactado</th></tr></thead><tbody>' +
+  body.innerHTML = '<table><thead><tr><th>Empresa</th><th>Vendedor</th><th>Etapa</th><th>Fecha</th><th>Contactado</th><th>Visita</th></tr></thead><tbody>' +
     cur.map(d=>{
       const seller = DATA.sellers.find(s=>s.id===d.sellerId);
       const etapaCell = READONLY ? STAGE_LABELS[d.stage] : '<select class="stage-select" data-deal="'+d.id+'">'+opts(d.stage)+'</select>';
-      return '<tr><td>'+d.company+'</td><td>'+(seller?seller.name:'—')+'</td><td>'+etapaCell+'</td><td>'+d.date+'</td><td>'+(d.contacted||'—')+'</td></tr>';
+      return '<tr><td>'+d.company+'</td><td>'+(seller?seller.name:'—')+'</td><td>'+etapaCell+'</td><td>'+d.date+'</td><td>'+(d.contacted||'—')+'</td><td>'+(d.visited||'—')+'</td></tr>';
     }).join('') + '</tbody></table>';
   body.querySelectorAll('.stage-select').forEach(sel=>{
     sel.onchange = async ()=>{
@@ -838,9 +867,10 @@ document.getElementById('formProspect').onsubmit = async (e)=>{
   if(!company || !sellerId || !stage || !date) return;
 
   const seller = DATA.sellers.find(s=>s.id===sellerId);
-  const ETAPAS_CON_CONTACTO = ['contactado','visita','cotizacion','agendado','cerrado'];
-  const contacted = ETAPAS_CON_CONTACTO.includes(stage) ? new Date().toISOString().slice(0,10) : null;
-  const newDeal = {id:'d'+Date.now(), company, sellerId, stage, date, amount, contacted};
+  const hoy = new Date().toISOString().slice(0,10);
+  const contacted = ['contactado','visita','cotizacion','agendado','cerrado'].includes(stage) ? hoy : null;
+  const visited = ['visita','cotizacion','agendado','cerrado'].includes(stage) ? hoy : null;
+  const newDeal = {id:'d'+Date.now(), company, sellerId, stage, date, amount, contacted, visited};
   const submitBtn = e.target.querySelector('button[type="submit"]');
   submitBtn.disabled = true; submitBtn.textContent = 'Guardando...';
 
@@ -850,6 +880,7 @@ document.getElementById('formProspect').onsubmit = async (e)=>{
       stage:newDeal.stage, date:newDeal.date, amount:newDeal.amount
     };
     if(HAS_CONTACTED_AT && contacted) row.contacted_at = contacted;
+    if(HAS_VISITED_AT && visited) row.visited_at = visited;
     const {error} = await supabaseClient.from('dashboard_ventas').insert(row);
     if(error){
       console.error('Error guardando en Supabase', error);
@@ -919,15 +950,52 @@ document.getElementById('btnDeals').onclick = ()=>{
   modalDeals.classList.add('open');
 };
 
+/* ============ MODAL: Informe diario ============ */
+const modalReport = document.getElementById('modalReport');
+function generarInforme(fecha){
+  const contactados = DATA.deals.filter(d=>d.contacted===fecha);
+  const visitados = DATA.deals.filter(d=>d.visited===fecha);
+  const lista = arr => arr.length
+    ? '<table><thead><tr><th>Empresa</th><th>Vendedor</th><th>Etapa actual</th></tr></thead><tbody>' +
+      arr.map(d=>{
+        const seller = DATA.sellers.find(s=>s.id===d.sellerId);
+        return '<tr><td>'+d.company+'</td><td>'+(seller?seller.name:'—')+'</td><td>'+STAGE_LABELS[d.stage]+'</td></tr>';
+      }).join('') + '</tbody></table>'
+    : '<div class="empty-state">Sin registros ese día.</div>';
+  document.getElementById('reportBody').innerHTML =
+    '<h4 style="font-size:13px; margin:14px 0 8px;">☎ Contactados (' + contactados.length + ')</h4>' + lista(contactados) +
+    '<h4 style="font-size:13px; margin:18px 0 8px;">📍 Visitados (' + visitados.length + ')</h4>' + lista(visitados);
+}
+document.getElementById('btnReport').onclick = ()=>{
+  const input = document.getElementById('reportDate');
+  input.value = new Date().toISOString().slice(0,10);
+  generarInforme(input.value);
+  modalReport.classList.add('open');
+};
+document.getElementById('reportDate').onchange = ()=> generarInforme(document.getElementById('reportDate').value);
+document.getElementById('btnReportCSV').onclick = ()=>{
+  const fecha = document.getElementById('reportDate').value;
+  const sellerName = d => (DATA.sellers.find(s=>s.id===d.sellerId)||{}).name || '';
+  const rows = [['tipo','empresa','vendedor','etapa_actual','fecha']];
+  DATA.deals.filter(d=>d.contacted===fecha).forEach(d=> rows.push(['contactado', d.company, sellerName(d), d.stage, fecha]));
+  DATA.deals.filter(d=>d.visited===fecha).forEach(d=> rows.push(['visitado', d.company, sellerName(d), d.stage, fecha]));
+  const csv = rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'informe-'+fecha+'.csv'; a.click();
+  URL.revokeObjectURL(url);
+};
+
 /* ============ MODAL: CSV ============ */
 const modalCSV = document.getElementById('modalCSV');
 document.getElementById('btnCSV').onclick = ()=> modalCSV.classList.add('open');
 
 document.getElementById('btnExportCSV').onclick = ()=>{
-  const rows = [['id','empresa','vendedor','etapa','fecha','monto','contacto']];
+  const rows = [['id','empresa','vendedor','etapa','fecha','monto','contacto','visita']];
   DATA.deals.forEach(d=>{
     const sellerName = (DATA.sellers.find(s=>s.id===d.sellerId)||{}).name || '';
-    rows.push([d.id, d.company, sellerName, d.stage, d.date, d.amount ?? '', d.contacted ?? '']);
+    rows.push([d.id, d.company, sellerName, d.stage, d.date, d.amount ?? '', d.contacted ?? '', d.visited ?? '']);
   });
   const csv = rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
   const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
@@ -970,6 +1038,7 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
           else if(['etapa','stage','fase','estado'].includes(h)) cm.stage=i;
           else if(['fecha','date','dia'].includes(h)) cm.date=i;
           else if(['contacto','contactado','contactada','fecha contacto','fecha de contacto'].includes(h)) cm.contacted=i;
+          else if(['visita','fecha visita','fecha de visita'].includes(h)) cm.visited=i;
           else if(['monto','amount','valor','total','precio'].includes(h)) cm.amount=i;
         });
         if(cm.company===null || cm.date===null){
@@ -990,10 +1059,11 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
       dataLines.forEach((line, idx)=>{
         const cols = parseCSVLine(line, sep).map(c=>c.trim().replace(/^"|"$/g,''));
         const usaId = cols.length>=6;
-        const cm = colMapPorHeader || {company: usaId?1:0, seller: usaId?2:1, stage: usaId?3:2, date: usaId?4:3, amount: usaId?5:4, contacted: usaId?6:5};
+        const cm = colMapPorHeader || {company: usaId?1:0, seller: usaId?2:1, stage: usaId?3:2, date: usaId?4:3, amount: usaId?5:4, contacted: usaId?6:5, visited: usaId?7:6};
         const company = (cols[cm.company]||'').trim();
         const fechaISO = normalizarFecha(cols[cm.date]);
         const contactoISO = (cm.contacted!=null && cols[cm.contacted]) ? normalizarFecha(cols[cm.contacted]) : null;
+        const visitaISO = (cm.visited!=null && cols[cm.visited]) ? normalizarFecha(cols[cm.visited]) : null;
         const numeroFila = idx + (isHeader?2:1);
         if(!company || !fechaISO){
           ignoradas.push({fila: numeroFila, motivo: !company ? 'falta el nombre de la empresa' : 'fecha no reconocida: "'+(cols[cm.date]||'')+'"'});
@@ -1012,7 +1082,7 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
         }
         const newDeal = {
           id:'d'+Date.now()+Math.random().toString(36).slice(2,6),
-          company, sellerId, stage: etapa, date: fechaISO, amount: monto, contacted: contactoISO
+          company, sellerId, stage: etapa, date: fechaISO, amount: monto, contacted: contactoISO, visited: visitaISO
         };
         if(existentes.has(claveDeal(newDeal))){ duplicadas++; return; }
         existentes.add(claveDeal(newDeal));
@@ -1032,6 +1102,7 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
             const seller = DATA.sellers.find(s=>s.id===d.sellerId);
             const row = {id:d.id, company:d.company, seller_id:d.sellerId, seller_name: seller?seller.name:null, stage:d.stage, date:d.date, amount:d.amount};
             if(HAS_CONTACTED_AT && d.contacted) row.contacted_at = d.contacted;
+            if(HAS_VISITED_AT && d.visited) row.visited_at = d.visited;
             return row;
           });
           for(let i=0;i<rows.length;i+=200){
