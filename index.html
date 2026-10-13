@@ -164,10 +164,6 @@
   .empty-state{color:var(--text-faint); font-size:13px; padding:8px 0;}
   .stage-select{background:var(--card2); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:6px 8px; font-size:12px; cursor:pointer;}
   .stage-select:disabled{opacity:.5; cursor:wait;}
-  .alert-actions{display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;}
-  .btn-mini{background:var(--card2); border:1px solid var(--border); color:var(--text-dim); border-radius:8px; padding:5px 10px; font-size:12px; cursor:pointer; transition:all .15s;}
-  .btn-mini:hover{border-color:var(--lime); color:var(--lime);}
-  .btn-mini:disabled{opacity:.5; cursor:wait;}
 
   /* Modal */
   .modal-overlay{
@@ -251,6 +247,7 @@
     <span id="cloudStatus" style="font-size:11px; color:var(--text-faint); white-space:nowrap;"></span>
     <button class="btn btn-ghost" id="btnSettings">⚙ Personalizar</button>
     <button class="btn btn-ghost" id="btnManageSellers">Vendedores</button>
+    <button class="btn btn-ghost" id="btnDeals">📋 Operaciones</button>
     <button class="btn btn-ghost" id="btnCSV">CSV</button>
     <button class="btn btn-primary" id="btnAddProspect">+ Cargar venta</button>
   </div>
@@ -270,16 +267,6 @@
     <div class="card">
       <h3>Panel de alertas</h3>
       <div id="alertsBody"></div>
-    </div>
-  </div>
-
-  <div style="height:16px"></div>
-
-  <div class="grid" style="grid-template-columns:1fr;">
-    <div class="card">
-      <h3>Operaciones del mes</h3>
-      <p style="font-size:12px; color:var(--text-faint); margin:-6px 0 12px;">Usa el menú de la etapa para mover cada operación: Prospecto → Contactado → Visita → Cotización → Agendado → Cerrado.</p>
-      <div id="dealsBody"></div>
     </div>
   </div>
 
@@ -416,6 +403,16 @@
       <button type="button" class="btn btn-ghost" id="btnResetColors">Restablecer</button>
       <button type="button" class="btn btn-primary" data-close>Listo</button>
     </div>
+  </div>
+</div>
+
+<!-- MODAL: Operaciones del mes -->
+<div class="modal-overlay" id="modalDeals">
+  <div class="modal" style="max-width:760px;">
+    <button class="modal-close" data-close>&times;</button>
+    <h2>Operaciones del mes</h2>
+    <p style="font-size:12px; color:var(--text-faint); margin:-10px 0 14px;">Cambia la etapa de cada operación con el menú: Prospecto → Contactado → Visita → Cotización → Agendado → Cerrado. La fecha de contacto queda registrada automáticamente.</p>
+    <div id="dealsBody"></div>
   </div>
 </div>
 
@@ -697,7 +694,7 @@ function renderAlerts(){
     return days > 7;
   });
   if(staleProspects.length){
-    alerts.push({type:'warn', icon:'⏳', title:`${staleProspects.length} prospecto(s) sin contactar hace más de 7 días`, desc:staleProspects.slice(0,3).map(d=>d.company).join(', '), acciones: staleProspects.slice(0,5).map(d=>({id:d.id, company:d.company}))});
+    alerts.push({type:'warn', icon:'⏳', title:`${staleProspects.length} prospecto(s) sin contactar hace más de 7 días`, desc:staleProspects.slice(0,3).map(d=>d.company).join(', ')});
   }
 
   // Conversión cayendo 2 meses seguidos
@@ -727,18 +724,11 @@ function renderAlerts(){
   body.innerHTML = alerts.length ? alerts.map(a=>`
     <div class="alert-item">
       <div class="alert-icon ${a.type==='bad'?'bad':'warn'}">${a.icon}</div>
-      <div style="flex:1">
+      <div>
         <div class="alert-title">${a.title}</div>
         <div class="alert-desc">${a.desc}</div>
-        ${a.acciones?`<div class="alert-actions">${a.acciones.map(x=>`<button class="btn-mini" data-contactar="${x.id}">✓ ${x.company}</button>`).join('')}</div>`:''}
       </div>
     </div>`).join('') : `<div class="empty-state">Sin alertas por ahora. 🎉</div>`;
-  body.querySelectorAll('[data-contactar]').forEach(btn=>{
-    btn.onclick = async ()=>{
-      btn.disabled = true;
-      await cambiarEtapa(btn.getAttribute('data-contactar'), 'contactado');
-    };
-  });
 }
 
 /* ============ CAMBIO DE ETAPA (guarda en la nube y local) ============ */
@@ -921,6 +911,13 @@ document.getElementById('btnAddSeller').onclick = async ()=>{
   render();
 };
 
+
+/* ============ MODAL: Operaciones del mes ============ */
+const modalDeals = document.getElementById('modalDeals');
+document.getElementById('btnDeals').onclick = ()=>{
+  renderDealsList();
+  modalDeals.classList.add('open');
+};
 
 /* ============ MODAL: CSV ============ */
 const modalCSV = document.getElementById('modalCSV');
