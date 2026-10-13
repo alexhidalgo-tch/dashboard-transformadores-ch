@@ -953,18 +953,32 @@ document.getElementById('btnDeals').onclick = ()=>{
 /* ============ MODAL: Informe diario ============ */
 const modalReport = document.getElementById('modalReport');
 function generarInforme(fecha){
-  const contactados = DATA.deals.filter(d=>d.contacted===fecha);
-  const visitados = DATA.deals.filter(d=>d.visited===fecha);
-  const lista = arr => arr.length
-    ? '<table><thead><tr><th>Empresa</th><th>Vendedor</th><th>Etapa actual</th></tr></thead><tbody>' +
-      arr.map(d=>{
-        const seller = DATA.sellers.find(s=>s.id===d.sellerId);
-        return '<tr><td>'+d.company+'</td><td>'+(seller?seller.name:'—')+'</td><td>'+STAGE_LABELS[d.stage]+'</td></tr>';
-      }).join('') + '</tbody></table>'
-    : '<div class="empty-state">Sin registros ese día.</div>';
+  /* Unificación: empresas cuya fecha de carga coincida con el día
+     (eso es tu registro real de actividad diaria: la fecha que pones al cargar),
+     más las que tengan contacto o visita estampados ese día por cambio de etapa. */
+  const filas = [];
+  DATA.deals.forEach(d=>{
+    const motivos = [];
+    if(d.date===fecha) motivos.push('Cargada');
+    if(d.contacted===fecha) motivos.push('Contacto');
+    if(d.visited===fecha) motivos.push('Visita');
+    if(motivos.length){
+      const seller = DATA.sellers.find(s=>s.id===d.sellerId);
+      filas.push({d, seller: seller?seller.name:'—', motivos});
+    }
+  });
+  filas.sort((a,b)=> (a.seller||'').localeCompare(b.seller||''));
+  const nCargadas = filas.filter(f=>f.motivos.includes('Cargada')).length;
+  const nContactos = filas.filter(f=>f.motivos.includes('Contacto')).length;
+  const nVisitas = filas.filter(f=>f.motivos.includes('Visita')).length;
+  const body = filas.length
+    ? '<table><thead><tr><th>Empresa</th><th>Vendedor</th><th>Etapa</th><th>Registro</th></tr></thead><tbody>' +
+      filas.map(f=>'<tr><td>'+f.d.company+'</td><td>'+f.seller+'</td><td>'+STAGE_LABELS[f.d.stage]+'</td><td>'+f.motivos.join(' + ')+'</td></tr>').join('') +
+      '</tbody></table>'
+    : '<div class="empty-state">Sin empresas registradas ese día.</div>';
   document.getElementById('reportBody').innerHTML =
-    '<h4 style="font-size:13px; margin:14px 0 8px;">☎ Contactados (' + contactados.length + ')</h4>' + lista(contactados) +
-    '<h4 style="font-size:13px; margin:18px 0 8px;">📍 Visitados (' + visitados.length + ')</h4>' + lista(visitados);
+    '<div style="font-size:13px; color:var(--muted); margin:10px 0;">🏢 <b>' + filas.length + '</b> empresas · ☎ ' +
+      nContactos + ' contactos · 📍 ' + nVisitas + ' visitas · (de ' + nCargadas + ' cargadas con esa fecha)</div>' + body;
 }
 document.getElementById('btnReport').onclick = ()=>{
   const input = document.getElementById('reportDate');
@@ -976,9 +990,14 @@ document.getElementById('reportDate').onchange = ()=> generarInforme(document.ge
 document.getElementById('btnReportCSV').onclick = ()=>{
   const fecha = document.getElementById('reportDate').value;
   const sellerName = d => (DATA.sellers.find(s=>s.id===d.sellerId)||{}).name || '';
-  const rows = [['tipo','empresa','vendedor','etapa_actual','fecha']];
-  DATA.deals.filter(d=>d.contacted===fecha).forEach(d=> rows.push(['contactado', d.company, sellerName(d), d.stage, fecha]));
-  DATA.deals.filter(d=>d.visited===fecha).forEach(d=> rows.push(['visitado', d.company, sellerName(d), d.stage, fecha]));
+  const rows = [['empresa','vendedor','etapa_actual','registros','fecha']];
+  DATA.deals.forEach(d=>{
+    const motivos = [];
+    if(d.date===fecha) motivos.push('cargada');
+    if(d.contacted===fecha) motivos.push('contacto');
+    if(d.visited===fecha) motivos.push('visita');
+    if(motivos.length) rows.push([d.company, sellerName(d), d.stage, motivos.join(' + '), fecha]);
+  });
   const csv = rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
   const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
   const url = URL.createObjectURL(blob);
