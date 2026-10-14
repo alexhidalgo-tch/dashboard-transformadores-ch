@@ -1061,7 +1061,7 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
           else if(['monto','amount','valor','total','precio'].includes(h)) cm.amount=i;
         });
         if(cm.company===null || cm.date===null){
-          alert('No reconozco las columnas del CSV. Se necesitan al menos "empresa" y "fecha".\\nEncabezados vistos: ' + firstCols.join(' | '));
+          alert('No reconozco las columnas del CSV. Se necesitan al menos "empresa" y "fecha".\nEncabezados vistos: ' + firstCols.join(' | '));
           return;
         }
         colMapPorHeader = cm;
@@ -1072,8 +1072,16 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
       const newSellers = [];
       const newDeals = [];
       const ignoradas = [];
-      let duplicadas = 0;
-      const existentes = new Set(DATA.deals.map(claveDeal));
+      const actualizaciones = [];  // filas existentes que traen fechas de contacto/visita nuevas
+      let duplicadas = 0, actualizadas = 0;
+      /* clave -> lista de operaciones existentes con esa misma clave
+         (puede haber filas repetidas en la base; las fechas se aplican a todas) */
+      const existentes = new Map();
+      DATA.deals.forEach(d=>{
+        const k = claveDeal(d);
+        if(!existentes.has(k)) existentes.set(k, []);
+        existentes.get(k).push(d);
+      });
 
       dataLines.forEach((line, idx)=>{
         const cols = parseCSVLine(line, sep).map(c=>c.trim().replace(/^"|"$/g,''));
@@ -1103,14 +1111,40 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
           id:'d'+Date.now()+Math.random().toString(36).slice(2,6),
           company, sellerId, stage: etapa, date: fechaISO, amount: monto, contacted: contactoISO, visited: visitaISO
         };
-        if(existentes.has(claveDeal(newDeal))){ duplicadas++; return; }
-        existentes.add(claveDeal(newDeal));
+        const clave = claveDeal(newDeal);
+        const lista = existentes.get(clave);
+        if(lista && lista.length){
+          /* La empresa ya existe: si el CSV trae fechas de contacto/visita que faltan o cambiaron,
+             se actualizan en TODA fila existente con esa misma clave en vez de omitirla.
+             (Una celda vacía NO borra una fecha ya registrada.) */
+          let cambio = false;
+          for(const existente of lista){
+            const patch = {};
+            const prevContacted = existente.contacted, prevVisited = existente.visited;
+            if(contactoISO && contactoISO !== existente.contacted && HAS_CONTACTED_AT){
+              patch.contacted_at = contactoISO;
+              existente.contacted = contactoISO;
+            }
+            if(visitaISO && visitaISO !== existente.visited && HAS_VISITED_AT){
+              patch.visited_at = visitaISO;
+              existente.visited = visitaISO;
+            }
+            if(Object.keys(patch).length){
+              cambio = true;
+              actualizadas++;
+              actualizaciones.push({id: existente.id, patch, deal: existente, prevContacted, prevVisited});
+            }
+          }
+          if(!cambio) duplicadas++;
+          return;
+        }
+        existentes.set(clave, [newDeal]);
         DATA.deals.push(newDeal);
         newDeals.push(newDeal);
       });
 
       /* Subir a la nube por bloques; si un bloque falla, fila por fila (una fila mala no tira todo) */
-      let subidas = 0, fallidas = 0;
+      let subidas = 0, fallidas = 0, fechasFallidas = 0;
       if(SUPABASE_ENABLED && supabaseClient && CLOUD_MODE){
         if(newSellers.length){
           const {error} = await supabaseClient.from('dashboard_vendedores').insert(newSellers);
@@ -1136,6 +1170,16 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
             }
           }
         }
+        /* Actualizar fechas de contacto/visita en filas que ya existían */
+        for(const a of actualizaciones){
+          const {error} = await supabaseClient.from('dashboard_ventas').update(a.patch).eq('id', a.id);
+          if(error){
+            fechasFallidas++;
+            console.error('No se pudieron actualizar las fechas:', a.id, error);
+            a.deal.contacted = a.prevContacted;
+            a.deal.visited = a.prevVisited;
+          }
+        }
       }
 
       saveLocalCache(DATA);
@@ -1146,16 +1190,18 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
       /* Reporte detallado */
       const meses = [...new Set(newDeals.map(d=>d.date.slice(0,7)))].sort();
       let msg = 'Importación completada: ' + newDeals.length + ' operación(es) agregada(s).';
-      if(duplicadas) msg += '\\n' + duplicadas + ' duplicada(s) ya existentes, omitida(s).';
+      if(actualizadas) msg += '\n✅ ' + actualizadas + ' existente(s) actualizada(s) con fecha(s) de contacto/visita.';
+      if(duplicadas) msg += '\n' + duplicadas + ' duplicada(s) ya existentes, sin cambios.';
+      if(fechasFallidas) msg += '\n⚠ Fechas NO guardadas en la nube: ' + fechasFallidas + ' (mirá la consola F12).';
       if(SUPABASE_ENABLED && supabaseClient && CLOUD_MODE){
-        msg += '\\nSubidas a la nube: ' + subidas + (fallidas ? ' — FALLARON ' + fallidas + ' (mirá la consola F12).' : ' ✓');
+        msg += '\nSubidas a la nube: ' + subidas + (fallidas ? ' — FALLARON ' + fallidas + ' (mirá la consola F12).' : ' ✓');
       } else {
-        msg += '\\n⚠ SIN CONEXIÓN A LA NUBE: estos datos solo se guardaron en este navegador y se perderán al recargar la página.';
+        msg += '\n⚠ SIN CONEXIÓN A LA NUBE: estos datos solo se guardaron en este navegador y se perderán al recargar la página.';
       }
-      if(meses.length) msg += '\\nMeses con datos nuevos: ' + meses.map(monthLabel).join(', ');
+      if(meses.length) msg += '\nMeses con datos nuevos: ' + meses.map(monthLabel).join(', ');
       if(ignoradas.length){
-        msg += '\\n\\nFilas ignoradas: ' + ignoradas.length + '\\n' + ignoradas.slice(0,5).map(x=>'Fila '+x.fila+': '+x.motivo).join('\\n');
-        if(ignoradas.length>5) msg += '\\n… y ' + (ignoradas.length-5) + ' más.';
+        msg += '\n\nFilas ignoradas: ' + ignoradas.length + '\n' + ignoradas.slice(0,5).map(x=>'Fila '+x.fila+': '+x.motivo).join('\n');
+        if(ignoradas.length>5) msg += '\n… y ' + (ignoradas.length-5) + ' más.';
       }
       alert(msg);
     }catch(err){
