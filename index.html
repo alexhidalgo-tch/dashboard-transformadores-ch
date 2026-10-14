@@ -952,6 +952,14 @@ document.getElementById('btnDeals').onclick = ()=>{
 
 /* ============ MODAL: Informe diario ============ */
 const modalReport = document.getElementById('modalReport');
+/* Último día con actividad registrada (hoy si ya hay datos, si no el último día cargado) */
+function fechaUltimaActividad(){
+  const hoy = new Date().toISOString().slice(0,10);
+  if(DATA.deals.some(d=> d.date===hoy || d.contacted===hoy || d.visited===hoy)) return hoy;
+  let ultima = '';
+  DATA.deals.forEach(d=>{ [d.date, d.contacted, d.visited].forEach(f=>{ if(f && f>ultima) ultima = f; }); });
+  return ultima || hoy;
+}
 function generarInforme(fecha){
   /* Unificación: empresas cuya fecha de carga coincida con el día
      (eso es tu registro real de actividad diaria: la fecha que pones al cargar),
@@ -975,14 +983,14 @@ function generarInforme(fecha){
     ? '<table><thead><tr><th>Empresa</th><th>Vendedor</th><th>Etapa</th><th>Registro</th></tr></thead><tbody>' +
       filas.map(f=>'<tr><td>'+f.d.company+'</td><td>'+f.seller+'</td><td>'+STAGE_LABELS[f.d.stage]+'</td><td>'+f.motivos.join(' + ')+'</td></tr>').join('') +
       '</tbody></table>'
-    : '<div class="empty-state">Sin empresas registradas ese día.</div>';
+    : '<div class="empty-state">Sin empresas registradas ese día.<br><span style="font-size:12px; color:var(--muted);">Elige otra fecha en el calendario de arriba (con ← → te mueves día a día).</span></div>';
   document.getElementById('reportBody').innerHTML =
     '<div style="font-size:13px; color:var(--muted); margin:10px 0;">🏢 <b>' + filas.length + '</b> empresas · ☎ ' +
       nContactos + ' contactos · 📍 ' + nVisitas + ' visitas · (de ' + nCargadas + ' cargadas con esa fecha)</div>' + body;
 }
 document.getElementById('btnReport').onclick = ()=>{
   const input = document.getElementById('reportDate');
-  input.value = new Date().toISOString().slice(0,10);
+  input.value = fechaUltimaActividad();
   generarInforme(input.value);
   modalReport.classList.add('open');
 };
@@ -1094,6 +1102,13 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
         const numeroFila = idx + (isHeader?2:1);
         if(!company || !fechaISO){
           ignoradas.push({fila: numeroFila, motivo: !company ? 'falta el nombre de la empresa' : 'fecha no reconocida: "'+(cols[cm.date]||'')+'"'});
+          return;
+        }
+        /* Nombres con letras dañadas (caracteres invisibles): no se importan para no duplicar la empresa */
+        const letraDanada = s => s.split('').some(ch=>{ const c = ch.charCodeAt(0); return c < 32 || c >= 0xFFFD; });
+        if(letraDanada(company)){
+          const nombreLegible = company.split('').map(ch=>{ const c = ch.charCodeAt(0); return (c < 32 || c >= 0xFFFD) ? '?' : ch; }).join('');
+          ignoradas.push({fila: numeroFila, motivo: 'letras dañadas en el nombre ("' + nombreLegible + '") — arréglalo en Excel y guarda como CSV UTF-8'});
           return;
         }
         const sellerName = (cols[cm.seller]||'').trim();
