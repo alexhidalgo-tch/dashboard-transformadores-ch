@@ -1108,7 +1108,7 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
       dataLines.forEach((line, idx)=>{
         const cols = parseCSVLine(line, sep).map(c=>c.trim().replace(/^"|"$/g,''));
         const usaId = cols.length>=6;
-        const cm = colMapPorHeader || {company: usaId?1:0, seller: usaId?2:1, stage: usaId?3:2, date: usaId?4:3, amount: usaId?5:4, contacted: usaId?6:5, visited: usaId?7:6};
+        const cm = colMapPorHeader || {id: usaId?0:null, company: usaId?1:0, seller: usaId?2:1, stage: usaId?3:2, date: usaId?4:3, amount: usaId?5:4, contacted: usaId?6:5, visited: usaId?7:6};
         const company = (cols[cm.company]||'').trim();
         const fechaISO = normalizarFecha(cols[cm.date]);
         const contactoISO = (cm.contacted!=null && cols[cm.contacted]) ? normalizarFecha(cols[cm.contacted]) : null;
@@ -1145,15 +1145,50 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
           company, sellerId, stage: etapaFinal, date: fechaISO, amount: monto, contacted: contactoISO, visited: visitaISO
         };
         const clave = claveDeal(newDeal);
+
+        /* ===== Reconocimiento por ID: si el CSV trae un ID que ya existe en la base,
+           es la MISMA fila → se le aplican TODAS las correcciones (empresa, responsable,
+           fecha, monto y fechas de contacto/visita). Nunca se duplica. ===== */
+        const idCSV = (cm.id!=null && cols[cm.id]) ? String(cols[cm.id]).trim() : '';
+        const porId = idCSV ? DATA.deals.find(x=>x.id===idCSV) : null;
+        if(porId){
+          const prev = {company: porId.company, sellerId: porId.sellerId, date: porId.date,
+                        amount: porId.amount, stage: porId.stage, contacted: porId.contacted, visited: porId.visited};
+          const patch = {};
+          if(company !== porId.company){ patch.company = company; porId.company = company; }
+          if(sellerName && sellerId !== porId.sellerId){ patch.seller_id = sellerId; patch.seller_name = sellerName; porId.sellerId = sellerId; }
+          if(fechaISO !== porId.date){ patch.date = fechaISO; porId.date = fechaISO; }
+          if(monto != null && monto !== porId.amount){ patch.amount = monto; porId.amount = monto; }
+          /* Fechas de contacto/visita: si cambiaron, se actualizan (una celda vacía NO borra) */
+          if(contactoISO && contactoISO !== porId.contacted && HAS_CONTACTED_AT){
+            patch.contacted_at = contactoISO; porId.contacted = contactoISO;
+          }
+          if(visitaISO && visitaISO !== porId.visited && HAS_VISITED_AT){
+            patch.visited_at = visitaISO; porId.visited = visitaISO;
+          }
+          /* Etapa: sube, nunca baja (por etapa más avanzada en el CSV o por las fechas entrantes) */
+          let stageObjetivo = porId.stage;
+          if(etapa && STAGES.indexOf(etapa) > STAGES.indexOf(stageObjetivo)) stageObjetivo = etapa;
+          if(patch.contacted_at && STAGES.indexOf(stageObjetivo) < STAGES.indexOf('contactado')) stageObjetivo = 'contactado';
+          if(patch.visited_at && STAGES.indexOf(stageObjetivo) < STAGES.indexOf('visita')) stageObjetivo = 'visita';
+          if(stageObjetivo !== porId.stage){ patch.stage = stageObjetivo; porId.stage = stageObjetivo; }
+          if(Object.keys(patch).length){
+            actualizadas++;
+            actualizaciones.push({id: porId.id, patch, deal: porId, prev});
+          } else duplicadas++;
+          return;
+        }
+
         const lista = existentes.get(clave);
         if(lista && lista.length){
-          /* La empresa ya existe: si el CSV trae fechas de contacto/visita que faltan o cambiaron,
-             se actualizan en TODA fila existente con esa misma clave en vez de omitirla.
-             (Una celda vacía NO borra una fecha ya registrada.) */
+          /* Sin ID o ID no encontrado: se reconoce por clave (empresa+vendedor+fecha+monto).
+             Si el CSV trae fechas de contacto/visita que faltan o cambiaron, se actualizan en
+             TODA fila existente con esa misma clave. (Una celda vacía NO borra una fecha ya registrada.) */
           let cambio = false;
           for(const existente of lista){
             const patch = {};
-            const prevContacted = existente.contacted, prevVisited = existente.visited, prevStage = existente.stage;
+            const prev = {company: existente.company, sellerId: existente.sellerId, date: existente.date,
+                          amount: existente.amount, stage: existente.stage, contacted: existente.contacted, visited: existente.visited};
             if(contactoISO && contactoISO !== existente.contacted && HAS_CONTACTED_AT){
               patch.contacted_at = contactoISO;
               existente.contacted = contactoISO;
@@ -1174,12 +1209,13 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
               }
               cambio = true;
               actualizadas++;
-              actualizaciones.push({id: existente.id, patch, deal: existente, prevContacted, prevVisited, prevStage});
+              actualizaciones.push({id: existente.id, patch, deal: existente, prev});
             }
           }
           if(!cambio) duplicadas++;
           return;
         }
+        if(idCSV && !DATA.deals.some(x=>x.id===idCSV)) newDeal.id = idCSV;
         existentes.set(clave, [newDeal]);
         DATA.deals.push(newDeal);
         newDeals.push(newDeal);
@@ -1217,10 +1253,8 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
           const {error} = await supabaseClient.from('dashboard_ventas').update(a.patch).eq('id', a.id);
           if(error){
             fechasFallidas++;
-            console.error('No se pudieron actualizar las fechas:', a.id, error);
-            a.deal.contacted = a.prevContacted;
-            a.deal.visited = a.prevVisited;
-            if(a.prevStage !== undefined) a.deal.stage = a.prevStage;
+            console.error('No se pudieron aplicar los cambios:', a.id, error);
+            Object.assign(a.deal, a.prev);
           }
         }
       }
@@ -1233,9 +1267,9 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
       /* Reporte detallado */
       const meses = [...new Set(newDeals.map(d=>d.date.slice(0,7)))].sort();
       let msg = 'Importación completada: ' + newDeals.length + ' operación(es) agregada(s).';
-      if(actualizadas) msg += '\n✅ ' + actualizadas + ' existente(s) actualizada(s) con fecha(s) de contacto/visita.';
+      if(actualizadas) msg += '\n✅ ' + actualizadas + ' existente(s) actualizada(s) con tus correcciones.';
       if(duplicadas) msg += '\n' + duplicadas + ' duplicada(s) ya existentes, sin cambios.';
-      if(fechasFallidas) msg += '\n⚠ Fechas NO guardadas en la nube: ' + fechasFallidas + ' (mirá la consola F12).';
+      if(fechasFallidas) msg += '\n⚠ Cambios NO guardados en la nube: ' + fechasFallidas + ' (mirá la consola F12).';
       if(SUPABASE_ENABLED && supabaseClient && CLOUD_MODE){
         msg += '\nSubidas a la nube: ' + subidas + (fallidas ? ' — FALLARON ' + fallidas + ' (mirá la consola F12).' : ' ✓');
       } else {
