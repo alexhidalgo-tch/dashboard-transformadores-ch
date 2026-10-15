@@ -984,9 +984,20 @@ function generarInforme(fecha){
       filas.map(f=>'<tr><td>'+f.d.company+'</td><td>'+f.seller+'</td><td>'+STAGE_LABELS[f.d.stage]+'</td><td>'+f.motivos.join(' + ')+'</td></tr>').join('') +
       '</tbody></table>'
     : '<div class="empty-state">Sin empresas registradas ese día.<br><span style="font-size:12px; color:var(--muted);">Elige otra fecha en el calendario de arriba (con ← → te mueves día a día).</span></div>';
+  /* Tarjetas de totales del día: prospectos cargados + contactados + visitas */
+  const caja = (icono, valor, detalle) =>
+    '<div class="card" style="flex:1; min-width:140px; padding:12px 14px; animation:none; opacity:1; transform:none;">' +
+      '<div class="kpi-label" style="margin-bottom:4px;">' + icono + '</div>' +
+      '<div class="kpi-value" style="font-size:26px;">' + valor + '</div>' +
+      '<div style="font-size:11px; color:var(--muted); margin-top:5px;">' + detalle + '</div>' +
+    '</div>';
   document.getElementById('reportBody').innerHTML =
-    '<div style="font-size:13px; color:var(--muted); margin:10px 0;">🏢 <b>' + filas.length + '</b> empresas · ☎ ' +
-      nContactos + ' contactos · 📍 ' + nVisitas + ' visitas · (de ' + nCargadas + ' cargadas con esa fecha)</div>' + body;
+    '<div style="display:flex; gap:10px; flex-wrap:wrap; margin:10px 0 4px;">' +
+      caja('📋 Prospectos del día', nCargadas, 'cargados con esa fecha') +
+      caja('☎ Contactados del día', nContactos, 'con fecha de contacto') +
+    '</div>' +
+    '<div style="font-size:13px; color:var(--muted); margin:8px 0 10px;">🏢 Aparecen <b>' + filas.length + '</b> empresas en el listado de ese día</div>' +
+    body;
 }
 document.getElementById('btnReport').onclick = ()=>{
   const input = document.getElementById('reportDate');
@@ -1122,9 +1133,13 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
           newSellers.push(newSeller);
           nameToSeller[sellerName]=sellerId;
         }
+        /* Etapa coherente: si el CSV trae fecha de contacto o visita, la etapa sube (nunca baja) */
+        let etapaFinal = etapa;
+        if(contactoISO && STAGES.indexOf(etapaFinal) < STAGES.indexOf('contactado')) etapaFinal = 'contactado';
+        if(visitaISO && STAGES.indexOf(etapaFinal) < STAGES.indexOf('visita')) etapaFinal = 'visita';
         const newDeal = {
           id:'d'+Date.now()+Math.random().toString(36).slice(2,6),
-          company, sellerId, stage: etapa, date: fechaISO, amount: monto, contacted: contactoISO, visited: visitaISO
+          company, sellerId, stage: etapaFinal, date: fechaISO, amount: monto, contacted: contactoISO, visited: visitaISO
         };
         const clave = claveDeal(newDeal);
         const lista = existentes.get(clave);
@@ -1135,7 +1150,7 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
           let cambio = false;
           for(const existente of lista){
             const patch = {};
-            const prevContacted = existente.contacted, prevVisited = existente.visited;
+            const prevContacted = existente.contacted, prevVisited = existente.visited, prevStage = existente.stage;
             if(contactoISO && contactoISO !== existente.contacted && HAS_CONTACTED_AT){
               patch.contacted_at = contactoISO;
               existente.contacted = contactoISO;
@@ -1145,9 +1160,18 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
               existente.visited = visitaISO;
             }
             if(Object.keys(patch).length){
+              /* Etapa coherente con las fechas que acaban de entrar (sube, nunca baja) */
+              if(patch.contacted_at && STAGES.indexOf(existente.stage) < STAGES.indexOf('contactado')){
+                patch.stage = 'contactado';
+                existente.stage = 'contactado';
+              }
+              if(patch.visited_at && STAGES.indexOf(existente.stage) < STAGES.indexOf('visita')){
+                patch.stage = 'visita';
+                existente.stage = 'visita';
+              }
               cambio = true;
               actualizadas++;
-              actualizaciones.push({id: existente.id, patch, deal: existente, prevContacted, prevVisited});
+              actualizaciones.push({id: existente.id, patch, deal: existente, prevContacted, prevVisited, prevStage});
             }
           }
           if(!cambio) duplicadas++;
@@ -1193,6 +1217,7 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
             console.error('No se pudieron actualizar las fechas:', a.id, error);
             a.deal.contacted = a.prevContacted;
             a.deal.visited = a.prevVisited;
+            if(a.prevStage !== undefined) a.deal.stage = a.prevStage;
           }
         }
       }
@@ -1229,7 +1254,10 @@ document.getElementById('fileImportCSV').onchange = (e)=>{
 
 /* ===== Utilidades de importación ===== */
 function claveDeal(d){
-  return [d.company, d.sellerId, d.stage, d.date, d.amount==null?'':d.amount].join('|').toLowerCase();
+  /* Clave de deduplicación: empresa + vendedor + fecha de carga + monto.
+     La etapa NO va en la clave: puede cambiar (sube al registrar contacto/visita)
+     y no debe hacer parecer que es otra operación distinta. */
+  return [d.company, d.sellerId, d.date, d.amount==null?'':d.amount].join('|').toLowerCase();
 }
 function parseCSVLine(line, sep=','){
   const result = [];
