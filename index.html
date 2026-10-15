@@ -278,13 +278,13 @@
       <h3>Ranking del equipo</h3>
       <table>
         <thead>
-          <tr><th>Vendedor</th><th>Prospectos</th><th>Contactados</th><th>Cerrados</th><th>Conversión</th></tr>
+          <tr><th>Vendedor</th><th>Prospectos</th><th>Contactados</th><th>Cerrados</th><th>Tasa de conversión</th></tr>
         </thead>
         <tbody id="rankingBody"></tbody>
       </table>
     </div>
     <div class="card">
-      <h3>Objetivo cualitativo del mes</h3>
+      <h3>Tasa de conversión del mes</h3>
       <div id="goalBody"></div>
     </div>
   </div>
@@ -666,7 +666,7 @@ function renderRanking(){
     const prospects = sd.length;
     const contacted = stageCount(sd,'contactado');
     const closed = sd.filter(d=>d.stage==='cerrado').length;
-    const conv = prospects ? Math.round((closed/prospects)*100) : 0;
+    const conv = prospects ? Math.round((contacted/prospects)*100) : 0;
     return {seller, prospects, contacted, closed, conv};
   }).sort((a,b)=>b.closed-a.closed || b.conv-a.conv);
 
@@ -687,18 +687,20 @@ function renderRanking(){
 /* ============ RENDER: GOAL PANEL ============ */
 function renderGoal(){
   const cur = dealsInMonth(currentMonth);
-  const closed = cur.filter(d=>d.stage==='cerrado').length;
+  const prospects = cur.length;
+  const contacted = stageCount(cur,'contactado');
+  const conv = prospects ? Math.round((contacted/prospects)*100) : 0;
   const el = document.getElementById('goalBody');
   el.innerHTML = `
-    <p style="font-size:13px; color:var(--text-dim); line-height:1.6; margin-bottom:14px;">
-      Todavía no hay una meta numérica fija — el objetivo del mes es sumar prospectos nuevos, contactarlos y cerrar la mayor cantidad de servicios posible.
-    </p>
     <div style="display:flex; align-items:baseline; gap:8px;">
-      <div class="kpi-value tabular">${closed}</div>
-      <div style="font-size:13px; color:var(--text-dim);">servicios cerrados este mes</div>
+      <div class="kpi-value tabular">${conv}%</div>
+      <div style="font-size:13px; color:var(--text-dim);">de contactados sobre prospectos</div>
+    </div>
+    <div style="font-size:13px; color:var(--text-dim); line-height:1.6; margin-top:12px;">
+      ☎ ${contacted} contactados de 📋 ${prospects} prospectos este mes
     </div>
     <div style="font-size:12px; color:var(--text-faint); margin-top:10px;">
-      A medida que definan objetivos mensuales por vendedor, este panel va a mostrar el % de cumplimiento.
+      Tasa de conversión = contactados ÷ prospectos del mes. Sube cada vez que un prospecto avance a Contactado o más allá.
     </div>`;
 }
 
