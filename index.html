@@ -615,8 +615,9 @@ function renderKPIs(){
   const prevContacted = stageCount(prev,'contactado');
   const closed = cur.filter(d=>d.stage==='cerrado').length;
   const prevClosed = prev.filter(d=>d.stage==='cerrado').length;
-  const convRate = newProspects ? Math.round((closed/newProspects)*100) : 0;
-  const prevConvRate = prevProspects ? Math.round((prevClosed/prevProspects)*100) : 0;
+  /* Tasa de conversión = % de contactados sobre prospectos del mes */
+  const convRate = newProspects ? Math.round((contacted/newProspects)*100) : 0;
+  const prevConvRate = prevProspects ? Math.round((prevContacted/prevProspects)*100) : 0;
 
   const kpis = [
     {label:'Prospectos nuevos', value:newProspects, prev:prevProspects, fmt:v=>v},
